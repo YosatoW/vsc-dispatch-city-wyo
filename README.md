@@ -8,9 +8,17 @@ Dieses Repository dokumentiert den Aufbau von **Dispatch City ab Block 03**. Der
 ## Releases
 
 - `v1.0.0`: Block 03 – Foundation mit Deployments, Services und ConfigMaps
-- `v1.1.1`: Block 04 – Ingress, Traefik, zwei Dashboard-Replikas und Self-Healing
+- `v1.0.4`: Block 04 – Ingress, Traefik, zwei Dashboard-Replikas und Self-Healing
 
-## Voraussetzungen
+# Schnellstart
+
+Dieser Abschnitt enthält nur die Schritte, die nötig sind, um den aktuellen Stand von Block 04 zu starten. Die ausführliche Beschreibung der umgesetzten Arbeiten folgt weiter unten.
+
+## Erstinstallation auf einem neuen Rechner
+
+### 1. Voraussetzungen
+
+Installiert sein müssen:
 
 - Docker Desktop
 - Git
@@ -28,31 +36,27 @@ kubectl version --client
 git --version
 ```
 
-## Repository klonen
+### 2. Repository klonen
 
 ```powershell
 git clone https://github.com/YosatoW/vsc-dispatch-city.git
 cd vsc-dispatch-city
 ```
 
-## Cluster erstellen oder starten
+### 3. Kubernetes-Cluster erstellen
 
-Vorhandene Cluster anzeigen:
+Docker Desktop muss vollständig gestartet sein.
+
+Prüfen, ob der Cluster bereits vorhanden ist:
 
 ```powershell
 k3d cluster list
 ```
 
-Falls `teko-k8s` fehlt:
+Falls `teko-k8s` noch nicht existiert:
 
 ```powershell
 k3d cluster create teko-k8s --agents 2 --wait
-```
-
-Falls der Cluster gestoppt ist:
-
-```powershell
-k3d cluster start teko-k8s
 ```
 
 Kontext setzen und Nodes prüfen:
@@ -64,9 +68,130 @@ kubectl get nodes -o wide
 
 Erwartet werden ein Server-Node und zwei Agent-Nodes im Status `Ready`.
 
-# Block 03 – Deployments, Services und ConfigMaps
+### 4. Images bauen
 
-## Was umgesetzt wurde
+```powershell
+docker build -t food-delivery-control-api:local --build-arg SERVICE=control-api -f build/go-service.Dockerfile .
+docker build -t food-delivery-dashboard:local ./apps/dashboard
+```
+
+### 5. Images in den k3d-Cluster importieren
+
+```powershell
+k3d image import -c teko-k8s food-delivery-control-api:local food-delivery-dashboard:local
+```
+
+### 6. Block 04 deployen
+
+```powershell
+kubectl apply -k ./deploy/overlays/block-04-ingress
+kubectl -n food-delivery rollout status deployment/control-api --timeout=180s
+kubectl -n food-delivery rollout status deployment/dashboard --timeout=180s
+```
+
+Status prüfen:
+
+```powershell
+kubectl -n food-delivery get deployment,pods,service,ingress
+```
+
+Erwarteter Zustand:
+
+```text
+control-api   1/1
+dashboard     2/2
+Ingress       traefik
+```
+
+### 7. Anwendung öffnen
+
+In einem separaten Terminal:
+
+```powershell
+kubectl -n kube-system rollout status deployment/traefik --timeout=180s
+kubectl -n kube-system port-forward service/traefik 8080:80
+```
+
+Das Terminal muss geöffnet bleiben.
+
+Browser:
+
+```text
+http://127.0.0.1:8080/
+```
+
+Falls Port `8080` belegt ist:
+
+```powershell
+kubectl -n kube-system port-forward service/traefik 8081:80
+```
+
+Dann lautet die Adresse:
+
+```text
+http://127.0.0.1:8081/
+```
+
+### 8. Funktion prüfen
+
+Bei Port `8080`:
+
+```powershell
+(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/").StatusCode
+(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/api/v1/snapshot").StatusCode
+(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/health/ready").StatusCode
+```
+
+Erwartet:
+
+```text
+200
+200
+200
+```
+
+## Neustart bei bereits eingerichteter Umgebung
+
+Wenn Cluster, Images und Kubernetes-Ressourcen bereits vorhanden sind, müssen die Images nicht neu gebaut und die Manifeste nicht erneut installiert werden.
+
+Docker Desktop starten und danach ausführen:
+
+```powershell
+cd vsc-dispatch-city
+k3d cluster start teko-k8s
+kubectl config use-context k3d-teko-k8s
+kubectl -n food-delivery get pods
+```
+
+Falls der Cluster bereits läuft, kann `k3d cluster start teko-k8s` übersprungen werden.
+
+Anwendung in einem separaten Terminal öffnen:
+
+```powershell
+kubectl -n kube-system port-forward service/traefik 8080:80
+```
+
+Browser:
+
+```text
+http://127.0.0.1:8080/
+```
+
+## Umgebung beenden
+
+Port-Forward im entsprechenden Terminal mit `Ctrl + C` beenden.
+
+Cluster stoppen, ohne ihn zu löschen:
+
+```powershell
+k3d cluster stop teko-k8s
+```
+
+Später kann der Cluster mit `k3d cluster start teko-k8s` wieder gestartet werden.
+
+# Was wurde umgesetzt?
+
+## Block 03 – Deployments, Services und ConfigMaps
 
 - Dispatch-City-Foundation `v1.0.0` übernommen
 - Images für Control API und Dashboard gebaut
@@ -79,30 +204,41 @@ Erwartet werden ein Server-Node und zwei Agent-Nodes im Status `Ready`.
 - Readiness- und Liveness-Probes geprüft
 - Änderungen an `TICK_MS` durch einen Rollout übernommen
 
-## Images bauen
+## Block 04 – Ingress und externe Zugriffe
 
-```powershell
-docker build -t food-delivery-control-api:local --build-arg SERVICE=control-api -f build/go-service.Dockerfile .
-docker build -t food-delivery-dashboard:local ./apps/dashboard
+- Block-4-Erweiterung aus Release `v1.1.1` integriert
+- Projektstand als Release `v1.0.4` markiert
+- Ingress `food-delivery` mit Ingress-Klasse `traefik` erstellt
+- Dashboard auf zwei Replikas skaliert
+- gemeinsames Path Routing eingerichtet
+- Dashboard, API und Health-Endpunkt über denselben Einstiegspunkt getestet
+- Load Balancing zwischen zwei Dashboard-Pods sichtbar gemacht
+- Self-Healing durch Löschen eines Dashboard-Pods geprüft
+
+## Architektur
+
+```text
+Browser / Client
+       |
+       | HTTP, zum Beispiel localhost:8080
+       v
+Traefik Ingress Controller
+       |
+       v
+Ingress food-delivery
+       |
+       +-- /         -> dashboard:3000 -> Dashboard-Pod A oder B
+       +-- /api      -> control-api:8080
+       +-- /health   -> control-api:8080
+       +-- /metrics  -> control-api:8080
 ```
 
-## Images in k3d importieren
+# Technische Prüfungen
 
-```powershell
-k3d image import -c teko-k8s food-delivery-control-api:local food-delivery-dashboard:local
-```
-
-## Geplanten Stand anzeigen
+## Block 03 rendern und deployen
 
 ```powershell
 kubectl kustomize ./deploy/overlays/block-03-standalone
-```
-
-Der Befehl rendert die Manifeste, verändert den Cluster aber noch nicht.
-
-## Block 03 deployen
-
-```powershell
 kubectl apply -k ./deploy/overlays/block-03-standalone
 kubectl -n food-delivery rollout status deployment/control-api
 kubectl -n food-delivery rollout status deployment/dashboard
@@ -129,7 +265,7 @@ Vollständiger interner DNS-Name:
 http://control-api.food-delivery.svc.cluster.local:8080/health/ready
 ```
 
-## ConfigMap und Rollout
+## ConfigMap und Rollout prüfen
 
 ```powershell
 kubectl diff -k ./deploy/overlays/block-03-standalone
@@ -139,47 +275,7 @@ kubectl -n food-delivery rollout status deployment/control-api
 kubectl -n food-delivery logs deployment/control-api
 ```
 
-# Block 04 – Ingress und externe Zugriffe
-
-## Was umgesetzt wurde
-
-- Block-4-Erweiterung `v1.1.1` integriert
-- Ingress `food-delivery` mit Ingress-Klasse `traefik` erstellt
-- Dashboard auf zwei Replikas skaliert
-- gemeinsames Path Routing eingerichtet
-- Dashboard, API und Health-Endpunkt über denselben Einstiegspunkt getestet
-- Load Balancing zwischen zwei Dashboard-Pods sichtbar gemacht
-- Self-Healing durch Löschen eines Dashboard-Pods geprüft
-
-## Architektur
-
-```text
-Browser / Client
-       |
-       | HTTP, zum Beispiel localhost:8080
-       v
-Traefik Ingress Controller
-       |
-       v
-Ingress food-delivery
-       |
-       +-- /         -> dashboard:3000 -> Dashboard-Pod A oder B
-       +-- /api      -> control-api:8080
-       +-- /health   -> control-api:8080
-       +-- /metrics  -> control-api:8080
-```
-
-## Block-04-Erweiterung installieren
-
-Nur erforderlich, wenn der Block-04-Stand noch nicht im Repository enthalten ist:
-
-```powershell
-git clone --branch v1.1.1 --depth 1 https://github.com/SwitzerChees/vsc-dispatch-city-04-ingress.git ..\vsc-dispatch-city-04-ingress
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-& "..\vsc-dispatch-city-04-ingress\install.ps1" -Target "."
-```
-
-## Geplanten Block-04-Stand anzeigen
+## Block 04 rendern
 
 ```powershell
 kubectl kustomize ./deploy/overlays/block-04-ingress
@@ -191,74 +287,6 @@ Erwartete Kerneinstellungen:
 - Ingress-Klasse: `traefik`
 - Dashboard-Replikas: `2`
 - Control-API-Replikas: `1`
-
-## Images bauen und importieren
-
-```powershell
-docker build -t food-delivery-control-api:local --build-arg SERVICE=control-api -f build/go-service.Dockerfile .
-docker build -t food-delivery-dashboard:local ./apps/dashboard
-k3d image import -c teko-k8s food-delivery-control-api:local food-delivery-dashboard:local
-```
-
-## Block 04 deployen
-
-```powershell
-kubectl apply -k ./deploy/overlays/block-04-ingress
-kubectl -n food-delivery rollout status deployment/control-api --timeout=180s
-kubectl -n food-delivery rollout status deployment/dashboard --timeout=180s
-kubectl -n food-delivery get deployment,ingress
-```
-
-Erwarteter Zustand:
-
-```text
-control-api   1/1
-dashboard     2/2
-Ingress       traefik
-```
-
-## Anwendung öffnen
-
-In einem separaten Terminal:
-
-```powershell
-kubectl -n kube-system rollout status deployment/traefik --timeout=180s
-kubectl -n kube-system port-forward service/traefik 8080:80
-```
-
-Das Terminal muss geöffnet bleiben. Falls Port `8080` belegt ist:
-
-```powershell
-kubectl -n kube-system port-forward service/traefik 8081:80
-```
-
-Browser:
-
-```text
-http://127.0.0.1:8080/
-```
-
-Alternativ:
-
-```text
-http://127.0.0.1:8081/
-```
-
-## Routen testen
-
-```powershell
-(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/").StatusCode
-(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/api/v1/snapshot").StatusCode
-(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/health/ready").StatusCode
-```
-
-Erwartet:
-
-```text
-200
-200
-200
-```
 
 ## Load Balancing prüfen
 
@@ -345,31 +373,22 @@ git commit -m "Describe change"
 git push
 ```
 
-## Release-Tags erstellen
+## Release-Tags
 
-Block 03 markieren:
-
-```powershell
-git tag -a v1.0.0 -m "Block 03 foundation release v1.0.0"
-git push origin v1.0.0
-```
-
-Block 04 markieren:
-
-```powershell
-git tag -a v1.1.1 -m "Block 04 ingress release v1.1.1"
-git push origin v1.1.1
+```text
+v1.0.0  Block 03
+v1.0.4  Block 04
 ```
 
 # Aufräumen
 
-Nur Dispatch City entfernen:
+Nur die Dispatch-City-Ressourcen entfernen:
 
 ```powershell
 kubectl delete namespace food-delivery
 ```
 
-Vollständiger Reset:
+Vollständiger Reset inklusive Cluster:
 
 ```powershell
 k3d cluster delete teko-k8s
