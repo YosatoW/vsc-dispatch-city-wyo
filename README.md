@@ -1,33 +1,23 @@
-# Dispatch City – Block 03 und 04
+# Dispatch City – Block 03 bis 05
 
-Dieses Repository dokumentiert den Aufbau von **Dispatch City ab Block 03**. Der aktuelle Projektstand umfasst:
-
-- Block 03: Deployments, Services und ConfigMaps
-- Block 04: Ingress und externe Zugriffe
+Dieses Repository dokumentiert den Aufbau von **Dispatch City ab Block 03**.
 
 ## Releases
 
-- `v1.0.0`: Block 03 – Foundation mit Deployments, Services und ConfigMaps
-- `v1.0.4`: Block 04 – Ingress, Traefik, zwei Dashboard-Replikas und Self-Healing
+- `v1.0.0`: Block 03 – Deployments, Services und ConfigMaps
+- `v1.0.4`: Block 04 – Ingress, Traefik, Load Balancing und Self-Healing
+- `v1.0.5`: Block 05 – RabbitMQ, verteilte Worker und Competing Consumers
 
 # Schnellstart
 
-Dieser Abschnitt enthält nur die Schritte, die nötig sind, um den aktuellen Stand von Block 04 zu starten. Die ausführliche Beschreibung der umgesetzten Arbeiten folgt weiter unten.
-
-## Erstinstallation auf einem neuen Rechner
-
-### 1. Voraussetzungen
-
-Installiert sein müssen:
+## Voraussetzungen
 
 - Docker Desktop
 - Git
 - k3d
 - kubectl
-- PowerShell unter Windows oder Bash, WSL beziehungsweise Git Bash
+- PowerShell
 - Browser
-
-Versionen prüfen:
 
 ```powershell
 docker version
@@ -36,18 +26,18 @@ kubectl version --client
 git --version
 ```
 
-### 2. Repository klonen
+## Erstinstallation auf einem neuen Rechner
+
+### 1. Repository klonen
 
 ```powershell
-git clone https://github.com/YosatoW/vsc-dispatch-city.git
-cd vsc-dispatch-city
+git clone https://github.com/YosatoW/vsc-dispatch-city-wyo.git
+cd vsc-dispatch-city-wyo
 ```
 
-### 3. Kubernetes-Cluster erstellen
+### 2. Cluster erstellen
 
 Docker Desktop muss vollständig gestartet sein.
-
-Prüfen, ob der Cluster bereits vorhanden ist:
 
 ```powershell
 k3d cluster list
@@ -59,8 +49,6 @@ Falls `teko-k8s` noch nicht existiert:
 k3d cluster create teko-k8s --agents 2 --wait
 ```
 
-Kontext setzen und Nodes prüfen:
-
 ```powershell
 kubectl config use-context k3d-teko-k8s
 kubectl get nodes -o wide
@@ -68,78 +56,207 @@ kubectl get nodes -o wide
 
 Erwartet werden ein Server-Node und zwei Agent-Nodes im Status `Ready`.
 
-### 4. Images bauen
+### 3. Block-05-Images bauen
 
 ```powershell
-docker build -t food-delivery-control-api:local --build-arg SERVICE=control-api -f build/go-service.Dockerfile .
-docker build -t food-delivery-dashboard:local ./apps/dashboard
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\build-images.ps1
 ```
 
-### 5. Images in den k3d-Cluster importieren
+Erwartete Images:
 
-```powershell
-k3d image import -c teko-k8s food-delivery-control-api:local food-delivery-dashboard:local
+```text
+food-delivery-control-api:local
+food-delivery-customer-simulator:local
+food-delivery-courier-simulator:local
+food-delivery-order-worker:local
+food-delivery-restaurant-worker:local
+food-delivery-dashboard:local
 ```
 
-### 6. Block 04 deployen
+### 4. Images in k3d importieren
 
 ```powershell
-kubectl apply -k ./deploy/overlays/block-04-ingress
-kubectl -n food-delivery rollout status deployment/control-api --timeout=180s
-kubectl -n food-delivery rollout status deployment/dashboard --timeout=180s
+.\scripts\load-images.ps1 -Cluster teko-k8s
+```
+
+### 5. Block 05 deployen
+
+```powershell
+kubectl apply -k ./deploy/overlays/block-05-messaging
+kubectl -n food-delivery rollout status statefulset/rabbitmq --timeout=300s
+kubectl -n food-delivery wait --for=condition=Available deployment --all --timeout=300s
+kubectl -n food-delivery wait --for=condition=Ready pod --all --timeout=300s
 ```
 
 Status prüfen:
 
 ```powershell
-kubectl -n food-delivery get deployment,pods,service,ingress
+kubectl -n food-delivery get deploy,statefulset,pods,pvc
+kubectl -n food-delivery get configmap simulation-config -o jsonpath='{.data.APP_MODE}'
 ```
 
-Erwarteter Zustand:
+Erwartet werden unter anderem:
 
 ```text
-control-api   1/1
-dashboard     2/2
-Ingress       traefik
+RabbitMQ:             1/1 Ready
+Dashboard:            2/2 Ready
+Order Worker:         2/2 Ready
+data-rabbitmq-0:      Bound
+APP_MODE:             distributed
 ```
 
-### 7. Anwendung öffnen
+### 6. Anwendung öffnen
 
-In einem separaten Terminal:
-
-```powershell
-kubectl -n kube-system rollout status deployment/traefik --timeout=180s
-kubectl -n kube-system port-forward service/traefik 8080:80
-```
-
-Das Terminal muss geöffnet bleiben.
-
-Browser:
-
-```text
-http://127.0.0.1:8080/
-```
-
-Falls Port `8080` belegt ist:
+Terminal 1, Dispatch City über Traefik:
 
 ```powershell
 kubectl -n kube-system port-forward service/traefik 8081:80
 ```
 
-Dann lautet die Adresse:
-
-```text
-http://127.0.0.1:8081/
-```
-
-### 8. Funktion prüfen
-
-Bei Port `8080`:
+Terminal 2, RabbitMQ Management:
 
 ```powershell
-(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/").StatusCode
-(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/api/v1/snapshot").StatusCode
-(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/health/ready").StatusCode
+kubectl -n food-delivery port-forward service/rabbitmq 15672:15672
+```
+
+Browser:
+
+```text
+Dispatch City:        http://127.0.0.1:8081/
+RabbitMQ Management:  http://127.0.0.1:15672/
+```
+
+RabbitMQ-Anmeldung:
+
+```text
+Benutzername: delivery
+Passwort:     delivery
+```
+
+Falls Port `8081` belegt ist, kann ein anderer freier lokaler Port verwendet werden, zum Beispiel `8080:80`.
+
+## Neustart bei bereits eingerichteter Umgebung
+
+```powershell
+cd vsc-dispatch-city-wyo
+k3d cluster start teko-k8s
+kubectl config use-context k3d-teko-k8s
+kubectl -n food-delivery get pods
+```
+
+Falls der Cluster bereits läuft, kann `k3d cluster start teko-k8s` übersprungen werden.
+
+Danach die beiden Port-Forwards erneut starten:
+
+```powershell
+kubectl -n kube-system port-forward service/traefik 8081:80
+```
+
+```powershell
+kubectl -n food-delivery port-forward service/rabbitmq 15672:15672
+```
+
+## Umgebung beenden
+
+Die Port-Forwards in den jeweiligen Terminals mit `Ctrl + C` beenden.
+
+Cluster stoppen, ohne ihn zu löschen:
+
+```powershell
+k3d cluster stop teko-k8s
+```
+
+# Was wurde umgesetzt?
+
+## Block 03 – Deployments, Services und ConfigMaps
+
+- Control API und Dashboard als Container-Images gebaut
+- Images in den k3d-Cluster importiert
+- Kubernetes-Manifeste mit Kustomize angewendet
+- Namespace `food-delivery` verwendet
+- Deployments, Services und EndpointSlices geprüft
+- Kubernetes-DNS getestet
+- ConfigMap `simulation-config` verwendet
+- Readiness- und Liveness-Probes geprüft
+- Konfigurationsänderung per Rollout übernommen
+
+## Block 04 – Ingress und externe Zugriffe
+
+- Ingress `food-delivery` mit Ingress-Klasse `traefik` eingerichtet
+- Dashboard auf zwei Replikas skaliert
+- gemeinsamer HTTP-Einstieg für Dashboard, API, Health und Metrics eingerichtet
+- Load Balancing zwischen zwei Dashboard-Pods sichtbar gemacht
+- Self-Healing durch Löschen eines Dashboard-Pods geprüft
+
+## Block 05 – Messaging mit RabbitMQ
+
+- Betriebsmodus auf `APP_MODE=distributed` umgestellt
+- RabbitMQ `4.3.5-management-alpine` als StatefulSet eingesetzt
+- persistenter Speicher über `data-rabbitmq-0` mit `1 GiB` verwendet
+- RabbitMQ-Service für AMQP auf Port `5672` und Management auf Port `15672` bereitgestellt
+- Customer Simulator und Courier Simulator als StatefulSets betrieben
+- Order Worker mit zwei Replikas betrieben
+- Restaurant Worker für Pizza, Bowl und Curry bereitgestellt
+- Nachrichtenrückstau in der Pizza-Queue erzeugt
+- Rückstau mit zwei Competing Consumers abgebaut
+- RabbitMQ-Probes für die lokale Umgebung angepasst
+
+## Architektur nach Block 05
+
+```text
+Browser / Client
+       |
+       v
+Traefik Ingress
+       |
+       +-- /         -> Dashboard
+       +-- /api      -> Control API
+       +-- /health   -> Control API
+       +-- /metrics  -> Control API
+
+Producer und Worker
+       |
+       v
+RabbitMQ
+       |
+       +-- Restaurant Queues
+       +-- Order Projection
+       +-- Courier Dispatch
+       +-- Dead Letter Queue
+```
+
+RabbitMQ wird im Dashboard gelb dargestellt, weil die Darstellung den Message Broker als eigene Komponentenkategorie kennzeichnet. Der technische Zustand wird durch die Anzeige `1/1` bestimmt.
+
+# Technische Nachweise
+
+## Block 03
+
+```powershell
+kubectl kustomize ./deploy/overlays/block-03-standalone
+kubectl -n food-delivery get svc,endpointslice
+kubectl -n food-delivery get pods --show-labels
+```
+
+DNS-Test:
+
+```powershell
+kubectl run dns-test --image=curlimages/curl:8.8.0 -n food-delivery --restart=Never --rm -i -- curl -fsS http://control-api:8080/health/ready
+```
+
+## Block 04
+
+```powershell
+kubectl kustomize ./deploy/overlays/block-04-ingress
+kubectl -n food-delivery get deployment,ingress
+```
+
+Routen testen:
+
+```powershell
+(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8081/").StatusCode
+(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8081/api/v1/snapshot").StatusCode
+(Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8081/health/ready").StatusCode
 ```
 
 Erwartet:
@@ -150,234 +267,108 @@ Erwartet:
 200
 ```
 
-## Neustart bei bereits eingerichteter Umgebung
+## Block 05
 
-Wenn Cluster, Images und Kubernetes-Ressourcen bereits vorhanden sind, müssen die Images nicht neu gebaut und die Manifeste nicht erneut installiert werden.
-
-Docker Desktop starten und danach ausführen:
+Gesamtzustand:
 
 ```powershell
-cd vsc-dispatch-city
-k3d cluster start teko-k8s
-kubectl config use-context k3d-teko-k8s
-kubectl -n food-delivery get pods
+kubectl -n food-delivery get deploy,statefulset,pods,pvc
+kubectl -n food-delivery exec rabbitmq-0 -- rabbitmqctl list_queues name consumers messages_ready
 ```
 
-Falls der Cluster bereits läuft, kann `k3d cluster start teko-k8s` übersprungen werden.
+### Rückstau und Competing Consumers
 
-Anwendung in einem separaten Terminal öffnen:
+Pizza-Consumer stoppen und acht Events publizieren:
+
+```powershell
+kubectl -n food-delivery scale deployment/restaurant-pizza --replicas=0
+kubectl -n food-delivery wait --for=delete pod -l app.kubernetes.io/instance=restaurant-pizza --timeout=120s
+.\scripts\lab-publish.ps1 -Mode valid -Count 8
+kubectl -n food-delivery exec rabbitmq-0 -- rabbitmqctl list_queues name consumers messages_ready
+```
+
+Zwei Consumer starten:
+
+```powershell
+kubectl -n food-delivery scale deployment/restaurant-pizza --replicas=2
+kubectl -n food-delivery rollout status deployment/restaurant-pizza --timeout=180s
+kubectl -n food-delivery exec rabbitmq-0 -- rabbitmqctl list_queues name consumers messages_ready
+kubectl -n food-delivery logs -l app.kubernetes.io/instance=restaurant-pizza --prefix --since=2m
+```
+
+Beobachtetes Resultat:
+
+```text
+Vorher:  0 Consumer, 12 bis 13 messages_ready
+Nachher: 2 Consumer, 0 messages_ready
+
+Pod 1: restaurant-pizza-6b7d8c5486-5wgbn
+Pod 2: restaurant-pizza-6b7d8c5486-sggkg
+```
+
+Der Wert lag über acht Nachrichten, weil der laufende Customer Simulator während des Tests zusätzliche Pizza-Bestellungen publizierte.
+
+Nach dem Test auf den Normalzustand zurückskalieren:
+
+```powershell
+kubectl -n food-delivery scale deployment/restaurant-pizza --replicas=1
+kubectl -n food-delivery rollout status deployment/restaurant-pizza --timeout=180s
+```
+
+# Fehlerbehebung
+
+## RabbitMQ bleibt `0/1` oder startet wiederholt neu
+
+Status und Events prüfen:
+
+```powershell
+kubectl -n food-delivery get pod rabbitmq-0 -o wide
+kubectl -n food-delivery get pvc
+kubectl -n food-delivery describe pod rabbitmq-0
+kubectl -n food-delivery logs rabbitmq-0
+```
+
+In der lokalen Umgebung mussten die Probe-Timeouts auf fünf Sekunden erhöht werden. Der erfolgreiche Zustand lautet:
+
+```text
+rabbitmq-0   1/1   Running   0
+```
+
+## Port bereits belegt
+
+Einen anderen freien lokalen Port verwenden, zum Beispiel:
 
 ```powershell
 kubectl -n kube-system port-forward service/traefik 8080:80
 ```
 
-Browser:
+## ImagePullBackOff
 
-```text
-http://127.0.0.1:8080/
-```
-
-## Umgebung beenden
-
-Port-Forward im entsprechenden Terminal mit `Ctrl + C` beenden.
-
-Cluster stoppen, ohne ihn zu löschen:
+Images erneut bauen und in `teko-k8s` importieren:
 
 ```powershell
-k3d cluster stop teko-k8s
+.\scripts\build-images.ps1
+.\scripts\load-images.ps1 -Cluster teko-k8s
 ```
 
-Später kann der Cluster mit `k3d cluster start teko-k8s` wieder gestartet werden.
-
-# Was wurde umgesetzt?
-
-## Block 03 – Deployments, Services und ConfigMaps
-
-- Dispatch-City-Foundation `v1.0.0` übernommen
-- Images für Control API und Dashboard gebaut
-- Images in den k3d-Cluster importiert
-- Kubernetes-Manifeste mit Kustomize gerendert und angewendet
-- Namespace `food-delivery` verwendet
-- Control API und Dashboard als Deployments betrieben
-- Services, EndpointSlices und Kubernetes-DNS geprüft
-- ConfigMap `simulation-config` verwendet
-- Readiness- und Liveness-Probes geprüft
-- Änderungen an `TICK_MS` durch einen Rollout übernommen
-
-## Block 04 – Ingress und externe Zugriffe
-
-- Block-4-Erweiterung aus Release `v1.1.1` integriert
-- Projektstand als Release `v1.0.4` markiert
-- Ingress `food-delivery` mit Ingress-Klasse `traefik` erstellt
-- Dashboard auf zwei Replikas skaliert
-- gemeinsames Path Routing eingerichtet
-- Dashboard, API und Health-Endpunkt über denselben Einstiegspunkt getestet
-- Load Balancing zwischen zwei Dashboard-Pods sichtbar gemacht
-- Self-Healing durch Löschen eines Dashboard-Pods geprüft
-
-## Architektur
-
-```text
-Browser / Client
-       |
-       | HTTP, zum Beispiel localhost:8080
-       v
-Traefik Ingress Controller
-       |
-       v
-Ingress food-delivery
-       |
-       +-- /         -> dashboard:3000 -> Dashboard-Pod A oder B
-       +-- /api      -> control-api:8080
-       +-- /health   -> control-api:8080
-       +-- /metrics  -> control-api:8080
-```
-
-# Technische Prüfungen
-
-## Block 03 rendern und deployen
-
-```powershell
-kubectl kustomize ./deploy/overlays/block-03-standalone
-kubectl apply -k ./deploy/overlays/block-03-standalone
-kubectl -n food-delivery rollout status deployment/control-api
-kubectl -n food-delivery rollout status deployment/dashboard
-kubectl -n food-delivery get deploy,pods,svc,cm -o wide
-```
-
-## Service, EndpointSlice und DNS prüfen
-
-```powershell
-kubectl -n food-delivery get svc,endpointslice
-kubectl -n food-delivery get pods --show-labels
-kubectl -n food-delivery get endpointslice -l kubernetes.io/service-name=control-api
-```
-
-Health-Endpunkt aus einem temporären Pod prüfen:
-
-```powershell
-kubectl run dns-test --image=curlimages/curl:8.8.0 -n food-delivery --restart=Never --rm -i -- curl -fsS http://control-api:8080/health/ready
-```
-
-Vollständiger interner DNS-Name:
-
-```text
-http://control-api.food-delivery.svc.cluster.local:8080/health/ready
-```
-
-## ConfigMap und Rollout prüfen
-
-```powershell
-kubectl diff -k ./deploy/overlays/block-03-standalone
-kubectl apply -k ./deploy/overlays/block-03-standalone
-kubectl -n food-delivery rollout restart deployment/control-api
-kubectl -n food-delivery rollout status deployment/control-api
-kubectl -n food-delivery logs deployment/control-api
-```
-
-## Block 04 rendern
-
-```powershell
-kubectl kustomize ./deploy/overlays/block-04-ingress
-```
-
-Erwartete Kerneinstellungen:
-
-- Ingress: `food-delivery`
-- Ingress-Klasse: `traefik`
-- Dashboard-Replikas: `2`
-- Control-API-Replikas: `1`
-
-## Load Balancing prüfen
-
-```powershell
-1..20 | ForEach-Object {
-    (Invoke-RestMethod -Uri "http://127.0.0.1:8080/ui-instance" -DisableKeepAlive).instance
-} | Sort-Object -Unique
-```
-
-EndpointSlice prüfen:
-
-```powershell
-kubectl -n food-delivery get endpointslice -l kubernetes.io/service-name=dashboard -o wide
-```
-
-## Self-Healing prüfen
-
-Pods beobachten:
-
-```powershell
-kubectl -n food-delivery get pods -l app.kubernetes.io/name=dashboard -w
-```
-
-In einem zweiten Terminal einen Pod löschen:
-
-```powershell
-$pod = kubectl -n food-delivery get pod -l app.kubernetes.io/name=dashboard -o jsonpath='{.items[0].metadata.name}'
-kubectl -n food-delivery delete pod $pod
-kubectl -n food-delivery rollout status deployment/dashboard --timeout=180s
-```
-
-Kubernetes erstellt automatisch einen Ersatz-Pod und stellt wieder zwei Dashboard-Replikas bereit.
-
-# Diagnose
+## Diagnose
 
 ```powershell
 k3d cluster list
 kubectl config current-context
 kubectl get nodes -o wide
-kubectl -n food-delivery get deploy,pods,svc,endpointslice,ingress,cm -o wide
+kubectl -n food-delivery get deploy,statefulset,pods,svc,endpointslice,ingress,cm,pvc -o wide
 kubectl -n food-delivery get events --sort-by='.lastTimestamp'
-kubectl -n food-delivery describe ingress food-delivery
-kubectl -n food-delivery logs deployment/control-api
-```
-
-## Häufige Fehler
-
-### Port bereits belegt
-
-Einen anderen lokalen Port verwenden, zum Beispiel `8081:80`.
-
-### ImagePullBackOff
-
-Images erneut bauen und in `teko-k8s` importieren.
-
-### Webseite nicht erreichbar
-
-- Docker Desktop prüfen
-- Cluster `teko-k8s` prüfen
-- Kontext `k3d-teko-k8s` setzen
-- Pods und Rollouts prüfen
-- Traefik-Port-Forward neu starten
-
-### 404 über Traefik
-
-```powershell
-kubectl -n food-delivery describe ingress food-delivery
 ```
 
 # Git-Workflow
 
-Vor Arbeitsbeginn:
-
 ```powershell
-git pull
-```
-
-Änderungen hochladen:
-
-```powershell
+git pull --rebase origin main
 git status
 git add .
-git commit -m "Describe change"
-git push
-```
-
-## Release-Tags
-
-```text
-v1.0.0  Block 03
-v1.0.4  Block 04
+git commit -m "Add Block 05 messaging with RabbitMQ"
+git push origin main
 ```
 
 # Aufräumen
@@ -388,7 +379,7 @@ Nur die Dispatch-City-Ressourcen entfernen:
 kubectl delete namespace food-delivery
 ```
 
-Vollständiger Reset inklusive Cluster:
+Cluster vollständig löschen:
 
 ```powershell
 k3d cluster delete teko-k8s
