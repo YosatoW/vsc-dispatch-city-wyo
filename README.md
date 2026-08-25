@@ -1,16 +1,47 @@
-# Dispatch City – Block 03 bis 05
+# 1. Dispatch City – Block 03 bis 05
 
 Dieses Repository dokumentiert den Aufbau von **Dispatch City ab Block 03**.
 
-## Releases
+- [1. Dispatch City – Block 03 bis 05](#1-dispatch-city--block-03-bis-05)
+  - [1.1. Releases](#11-releases)
+- [2. Schnellstart](#2-schnellstart)
+  - [2.1. Voraussetzungen](#21-voraussetzungen)
+  - [2.2. Erstinstallation auf einem neuen Rechner](#22-erstinstallation-auf-einem-neuen-rechner)
+    - [2.2.1. Repository klonen](#221-repository-klonen)
+    - [2.2.2. Cluster erstellen](#222-cluster-erstellen)
+    - [2.2.3. Block-05-Images bauen](#223-block-05-images-bauen)
+    - [2.2.4. Images in k3d importieren](#224-images-in-k3d-importieren)
+    - [2.2.5. Block 05 deployen](#225-block-05-deployen)
+    - [2.2.6. Anwendung öffnen](#226-anwendung-öffnen)
+  - [2.3. Neustart bei bereits eingerichteter Umgebung](#23-neustart-bei-bereits-eingerichteter-umgebung)
+  - [2.4. Umgebung beenden](#24-umgebung-beenden)
+- [3. Was wurde umgesetzt?](#3-was-wurde-umgesetzt)
+  - [3.1. Block 03 – Deployments, Services und ConfigMaps](#31-block-03--deployments-services-und-configmaps)
+  - [3.2. Block 04 – Ingress und externe Zugriffe](#32-block-04--ingress-und-externe-zugriffe)
+  - [3.3. Block 05 – Messaging mit RabbitMQ](#33-block-05--messaging-mit-rabbitmq)
+  - [3.4. Architektur nach Block 05](#34-architektur-nach-block-05)
+- [4. Technische Nachweise](#4-technische-nachweise)
+  - [4.1. Block 03](#41-block-03)
+  - [4.2. Block 04](#42-block-04)
+  - [4.3. Block 05](#43-block-05)
+    - [4.3.1. Rückstau und Competing Consumers](#431-rückstau-und-competing-consumers)
+- [5. Fehlerbehebung](#5-fehlerbehebung)
+  - [5.1. RabbitMQ bleibt `0/1` oder startet wiederholt neu](#51-rabbitmq-bleibt-01-oder-startet-wiederholt-neu)
+  - [5.2. Port bereits belegt](#52-port-bereits-belegt)
+  - [5.3. ImagePullBackOff](#53-imagepullbackoff)
+  - [5.4. Diagnose](#54-diagnose)
+- [6. Git-Workflow](#6-git-workflow)
+- [7. Aufräumen](#7-aufräumen)
+
+## 1.1. Releases
 
 - `v1.0.0`: Block 03 – Deployments, Services und ConfigMaps
 - `v1.0.4`: Block 04 – Ingress, Traefik, Load Balancing und Self-Healing
 - `v1.0.5`: Block 05 – RabbitMQ, verteilte Worker und Competing Consumers
 
-# Schnellstart
+# 2. Schnellstart
 
-## Voraussetzungen
+## 2.1. Voraussetzungen
 
 - Docker Desktop
 - Git
@@ -26,16 +57,16 @@ kubectl version --client
 git --version
 ```
 
-## Erstinstallation auf einem neuen Rechner
+## 2.2. Erstinstallation auf einem neuen Rechner
 
-### 1. Repository klonen
+### 2.2.1. Repository klonen
 
 ```powershell
 git clone https://github.com/YosatoW/vsc-dispatch-city-wyo.git
 cd vsc-dispatch-city-wyo
 ```
 
-### 2. Cluster erstellen
+### 2.2.2. Cluster erstellen
 
 Docker Desktop muss vollständig gestartet sein.
 
@@ -56,7 +87,7 @@ kubectl get nodes -o wide
 
 Erwartet werden ein Server-Node und zwei Agent-Nodes im Status `Ready`.
 
-### 3. Block-05-Images bauen
+### 2.2.3. Block-05-Images bauen
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
@@ -74,13 +105,13 @@ food-delivery-restaurant-worker:local
 food-delivery-dashboard:local
 ```
 
-### 4. Images in k3d importieren
+### 2.2.4. Images in k3d importieren
 
 ```powershell
 .\scripts\load-images.ps1 -Cluster teko-k8s
 ```
 
-### 5. Block 05 deployen
+### 2.2.5. Block 05 deployen
 
 ```powershell
 kubectl apply -k ./deploy/overlays/block-05-messaging
@@ -106,7 +137,7 @@ data-rabbitmq-0:      Bound
 APP_MODE:             distributed
 ```
 
-### 6. Anwendung öffnen
+### 2.2.6. Anwendung öffnen
 
 Terminal 1, Dispatch City über Traefik:
 
@@ -127,19 +158,11 @@ Dispatch City:        http://127.0.0.1:8081/
 RabbitMQ Management:  http://127.0.0.1:15672/
 ```
 
-RabbitMQ-Anmeldung:
-
-```text
-Benutzername: delivery
-Passwort:     delivery
-```
-
 Falls Port `8081` belegt ist, kann ein anderer freier lokaler Port verwendet werden, zum Beispiel `8080:80`.
 
-## Neustart bei bereits eingerichteter Umgebung
+## 2.3. Neustart bei bereits eingerichteter Umgebung
 
 ```powershell
-cd vsc-dispatch-city-wyo
 k3d cluster start teko-k8s
 kubectl config use-context k3d-teko-k8s
 kubectl -n food-delivery get pods
@@ -157,7 +180,7 @@ kubectl -n kube-system port-forward service/traefik 8081:80
 kubectl -n food-delivery port-forward service/rabbitmq 15672:15672
 ```
 
-## Umgebung beenden
+## 2.4. Umgebung beenden
 
 Die Port-Forwards in den jeweiligen Terminals mit `Ctrl + C` beenden.
 
@@ -167,9 +190,9 @@ Cluster stoppen, ohne ihn zu löschen:
 k3d cluster stop teko-k8s
 ```
 
-# Was wurde umgesetzt?
+# 3. Was wurde umgesetzt?
 
-## Block 03 – Deployments, Services und ConfigMaps
+## 3.1. Block 03 – Deployments, Services und ConfigMaps
 
 - Control API und Dashboard als Container-Images gebaut
 - Images in den k3d-Cluster importiert
@@ -181,7 +204,7 @@ k3d cluster stop teko-k8s
 - Readiness- und Liveness-Probes geprüft
 - Konfigurationsänderung per Rollout übernommen
 
-## Block 04 – Ingress und externe Zugriffe
+## 3.2. Block 04 – Ingress und externe Zugriffe
 
 - Ingress `food-delivery` mit Ingress-Klasse `traefik` eingerichtet
 - Dashboard auf zwei Replikas skaliert
@@ -189,7 +212,7 @@ k3d cluster stop teko-k8s
 - Load Balancing zwischen zwei Dashboard-Pods sichtbar gemacht
 - Self-Healing durch Löschen eines Dashboard-Pods geprüft
 
-## Block 05 – Messaging mit RabbitMQ
+## 3.3. Block 05 – Messaging mit RabbitMQ
 
 - Betriebsmodus auf `APP_MODE=distributed` umgestellt
 - RabbitMQ `4.3.5-management-alpine` als StatefulSet eingesetzt
@@ -202,7 +225,7 @@ k3d cluster stop teko-k8s
 - Rückstau mit zwei Competing Consumers abgebaut
 - RabbitMQ-Probes für die lokale Umgebung angepasst
 
-## Architektur nach Block 05
+## 3.4. Architektur nach Block 05
 
 ```text
 Browser / Client
@@ -228,9 +251,9 @@ RabbitMQ
 
 RabbitMQ wird im Dashboard gelb dargestellt, weil die Darstellung den Message Broker als eigene Komponentenkategorie kennzeichnet. Der technische Zustand wird durch die Anzeige `1/1` bestimmt.
 
-# Technische Nachweise
+# 4. Technische Nachweise
 
-## Block 03
+## 4.1. Block 03
 
 ```powershell
 kubectl kustomize ./deploy/overlays/block-03-standalone
@@ -244,7 +267,7 @@ DNS-Test:
 kubectl run dns-test --image=curlimages/curl:8.8.0 -n food-delivery --restart=Never --rm -i -- curl -fsS http://control-api:8080/health/ready
 ```
 
-## Block 04
+## 4.2. Block 04
 
 ```powershell
 kubectl kustomize ./deploy/overlays/block-04-ingress
@@ -267,7 +290,7 @@ Erwartet:
 200
 ```
 
-## Block 05
+## 4.3. Block 05
 
 Gesamtzustand:
 
@@ -276,7 +299,7 @@ kubectl -n food-delivery get deploy,statefulset,pods,pvc
 kubectl -n food-delivery exec rabbitmq-0 -- rabbitmqctl list_queues name consumers messages_ready
 ```
 
-### Rückstau und Competing Consumers
+### 4.3.1. Rückstau und Competing Consumers
 
 Pizza-Consumer stoppen und acht Events publizieren:
 
@@ -315,9 +338,9 @@ kubectl -n food-delivery scale deployment/restaurant-pizza --replicas=1
 kubectl -n food-delivery rollout status deployment/restaurant-pizza --timeout=180s
 ```
 
-# Fehlerbehebung
+# 5. Fehlerbehebung
 
-## RabbitMQ bleibt `0/1` oder startet wiederholt neu
+## 5.1. RabbitMQ bleibt `0/1` oder startet wiederholt neu
 
 Status und Events prüfen:
 
@@ -334,7 +357,7 @@ In der lokalen Umgebung mussten die Probe-Timeouts auf fünf Sekunden erhöht we
 rabbitmq-0   1/1   Running   0
 ```
 
-## Port bereits belegt
+## 5.2. Port bereits belegt
 
 Einen anderen freien lokalen Port verwenden, zum Beispiel:
 
@@ -342,7 +365,7 @@ Einen anderen freien lokalen Port verwenden, zum Beispiel:
 kubectl -n kube-system port-forward service/traefik 8080:80
 ```
 
-## ImagePullBackOff
+## 5.3. ImagePullBackOff
 
 Images erneut bauen und in `teko-k8s` importieren:
 
@@ -351,7 +374,7 @@ Images erneut bauen und in `teko-k8s` importieren:
 .\scripts\load-images.ps1 -Cluster teko-k8s
 ```
 
-## Diagnose
+## 5.4. Diagnose
 
 ```powershell
 k3d cluster list
@@ -361,7 +384,7 @@ kubectl -n food-delivery get deploy,statefulset,pods,svc,endpointslice,ingress,c
 kubectl -n food-delivery get events --sort-by='.lastTimestamp'
 ```
 
-# Git-Workflow
+# 6. Git-Workflow
 
 ```powershell
 git pull --rebase origin main
@@ -371,7 +394,7 @@ git commit -m "Add Block 05 messaging with RabbitMQ"
 git push origin main
 ```
 
-# Aufräumen
+# 7. Aufräumen
 
 Nur die Dispatch-City-Ressourcen entfernen:
 
